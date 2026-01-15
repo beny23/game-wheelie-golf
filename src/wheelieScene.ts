@@ -52,6 +52,40 @@ export class WheelieScene extends Phaser.Scene {
 
   private bestText?: Phaser.GameObjects.Text;
 
+  private dailyText?: Phaser.GameObjects.Text;
+
+  private sessionText?: Phaser.GameObjects.Text;
+
+  private skyLayer?: Phaser.GameObjects.Rectangle;
+
+  private hillLayers: Phaser.GameObjects.Rectangle[] = [];
+
+  private hazeBands: Phaser.GameObjects.Rectangle[] = [];
+
+  private clouds: Phaser.GameObjects.Ellipse[] = [];
+
+  private distantProps: Phaser.GameObjects.GameObject[] = [];
+
+  private rearGrounded = false;
+
+  private lastTrailTime = 0;
+
+  private lastDustTime = 0;
+
+  private lastSparkTime = 0;
+
+  private milestoneInterval = 250;
+
+  private nextMilestone = 250;
+
+  private sessionBest = 0;
+
+  private dailyBest = 0;
+
+  private ghostMarker?: Phaser.GameObjects.Arc;
+
+  private readonly dailyBestStorageKey = "wheelie-daily-best";
+
   private gameOver = false;
 
   private groundCategory?: number;
@@ -69,12 +103,15 @@ export class WheelieScene extends Phaser.Scene {
     this.group = Body.nextGroup(true);
 
     this.bestDistance = this.loadBestDistance();
+    this.dailyBest = this.loadDailyBest();
+    this.sessionBest = 0;
 
     this.setupInput();
     this.createBackground();
     this.createCourse();
     this.createCart();
     this.createHud();
+      this.createGhostMarker();
   }
 
   update(_time: number, delta: number): void {
@@ -109,22 +146,35 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private createBackground(): void {
-    const sky = this.add.rectangle(0, 0, this.scale.width * 2, this.scale.height * 2, 0x0b1224)
+    this.skyLayer = this.add.rectangle(0, 0, this.scale.width * 2, this.scale.height * 2, 0x0b1224)
       .setOrigin(0, 0)
-      .setScrollFactor(0);
-    sky.setFillStyle(0x0b1224, 1);
+      .setScrollFactor(0)
+      .setDepth(-20);
 
-    const hills = this.add.rectangle(0, this.scale.height * 0.55, this.scale.width * 3, 180, 0x0f172a, 1)
-      .setOrigin(0, 0)
-      .setScrollFactor(0.35);
-    hills.setDepth(-8);
+    const hillConfigs = [
+      { y: this.scale.height * 0.62, h: 220, color: 0x0f172a, factor: 0.28, depth: -12 },
+      { y: this.scale.height * 0.68, h: 180, color: 0x13203a, factor: 0.36, depth: -11 },
+      { y: this.scale.height * 0.74, h: 140, color: 0x1a2c4a, factor: 0.45, depth: -10 },
+    ];
 
-    for (let i = 0; i < 4; i += 1) {
-      const band = this.add.rectangle(0, 80 + i * 60, this.scale.width * 3, 10, 0x0ea5e9, 0.12)
+    this.hillLayers = hillConfigs.map((cfg) => {
+      return this.add.rectangle(0, cfg.y, this.scale.width * 3.5, cfg.h, cfg.color, 1)
         .setOrigin(0, 0)
-        .setScrollFactor(0.25 + i * 0.05);
-      band.setDepth(-10 + i);
+        .setScrollFactor(cfg.factor)
+        .setDepth(cfg.depth);
+    });
+
+    this.hazeBands = [];
+    for (let i = 0; i < 4; i += 1) {
+      const band = this.add.rectangle(0, 60 + i * 70, this.scale.width * 3.4, 14, 0x38bdf8, 0.14)
+        .setOrigin(0, 0)
+        .setScrollFactor(0.22 + i * 0.06)
+        .setDepth(-9 + i);
+      this.hazeBands.push(band);
     }
+
+    this.spawnClouds();
+    this.spawnDistantProps();
   }
 
   private createCourse(): void {
@@ -169,6 +219,7 @@ export class WheelieScene extends Phaser.Scene {
       const v = this.cart.chassis.velocity;
       const speed = Math.sqrt(v.x * v.x + v.y * v.y) * 60; // px/s approx
       this.speedText.setText(`Speed: ${speed.toFixed(0)}`);
+      this.maybeSpawnWheelTrail(speed);
     }
 
     if (this.cart?.chassis && this.distanceText) {
@@ -176,12 +227,85 @@ export class WheelieScene extends Phaser.Scene {
       const meters = dx / 100;
       this.distanceText.setText(`Distance: ${meters.toFixed(1)} m`);
       this.updateBestDistance(meters);
+      this.updateBackdrop(meters);
+      this.checkMilestones(meters);
+      this.updateGhostPosition();
     }
 
     if (this.cart?.chassis && this.angleText) {
       const deg = Phaser.Math.RadToDeg(this.cart.chassis.angle % (Math.PI * 2));
       const normalized = ((deg % 360) + 360) % 360; // 0-360
       this.angleText.setText(`Angle: ${normalized.toFixed(1)}°`);
+    }
+  }
+
+  private maybeSpawnWheelTrail(speed: number): void {
+    if (!this.cart?.rearWheel) return;
+    if (!this.rearGrounded) return;
+    if (speed < 240) return;
+    if (this.time.now - this.lastTrailTime < 90) return;
+    this.lastTrailTime = this.time.now;
+
+    const w = this.cart.rearWheel.position;
+    const trail = this.add.rectangle(w.x - 6, w.y + 22, 22, 6, 0x0ea5e9, 0.22).setDepth(3);
+    this.tweens.add({
+      targets: trail,
+      alpha: 0,
+      scaleX: 0.6,
+      scaleY: 0.5,
+      duration: 260,
+      onComplete: () => trail.destroy(),
+    });
+  }
+
+  private spawnDustIfHardLanding(pos: Phaser.Types.Math.Vector2Like, verticalVelocity: number): void {
+    const impact = Math.abs(verticalVelocity);
+    if (impact < 2.6) return;
+    if (this.time.now - this.lastDustTime < 140) return;
+    this.lastDustTime = this.time.now;
+
+    const count = Phaser.Math.Clamp(3 + Math.floor(impact * 0.6), 3, 7);
+    for (let i = 0; i < count; i += 1) {
+      const dx = Phaser.Math.FloatBetween(-10, 10);
+      const dy = Phaser.Math.FloatBetween(-12, -4);
+      const puff = this.add.circle(pos.x + dx, pos.y + 6, Phaser.Math.Between(6, 10), 0xe5e7eb, 0.4).setDepth(2);
+      const sway = Phaser.Math.FloatBetween(-12, 12);
+      this.tweens.add({
+        targets: puff,
+        x: puff.x + sway,
+        y: puff.y + dy,
+        alpha: 0,
+        scale: 1.4,
+        duration: Phaser.Math.Between(260, 420),
+        onComplete: () => puff.destroy(),
+      });
+    }
+  }
+
+  private spawnSparksIfScrape(): void {
+    if (!this.cart?.chassis) return;
+    if (this.time.now - this.lastSparkTime < 200) return;
+    const av = Math.abs(this.cart.chassis.angularVelocity);
+    const vy = this.cart.chassis.velocity.y;
+    if (av < 0.9 || vy < 0.5) return;
+    this.lastSparkTime = this.time.now;
+
+    const baseX = this.cart.chassis.position.x - 52;
+    const baseY = this.cart.chassis.position.y + 18;
+    const sparks = Phaser.Math.Between(4, 6);
+    for (let i = 0; i < sparks; i += 1) {
+      const dirX = Phaser.Math.FloatBetween(-1.2, 0.4);
+      const dirY = Phaser.Math.FloatBetween(-1.4, -0.2);
+      const spark = this.add.triangle(baseX, baseY, 0, 0, 8, 3, 0, 6, 0xfcd34d, 0.9).setDepth(6);
+      this.tweens.add({
+        targets: spark,
+        x: spark.x + dirX * 32,
+        y: spark.y + dirY * 28,
+        alpha: 0,
+        rotation: Phaser.Math.FloatBetween(-0.8, 0.8),
+        duration: Phaser.Math.Between(180, 260),
+        onComplete: () => spark.destroy(),
+      });
     }
   }
 
@@ -208,6 +332,42 @@ export class WheelieScene extends Phaser.Scene {
         if (isGround) {
           this.frontContactStart = this.time.now;
         }
+      }
+    });
+
+    this.matter.world.on("collisionstart", (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
+      if (!this.cart?.rearWheel || this.gameOver) return;
+
+      for (const pair of event.pairs) {
+        const bodies = [pair.bodyA, pair.bodyB];
+        const involvesRear = bodies.some((b) => b.id === this.cart?.rearWheel?.id);
+        if (!involvesRear) continue;
+
+        const other = bodies.find((b) => b.id !== this.cart?.rearWheel?.id);
+        if (!other) continue;
+
+        const isGround = other.label === "ground";
+        const isHazard = other.label === "hazard" || this.course?.hazardBodies.has(other.id);
+
+        if (isHazard) {
+          this.triggerFail("Hit hazard — boom!");
+          return;
+        }
+
+        if (isGround) {
+          this.rearGrounded = true;
+          this.spawnDustIfHardLanding(this.cart.rearWheel.position, this.cart.rearWheel.velocity.y);
+        }
+      }
+    });
+
+    this.matter.world.on("collisionend", (event: Phaser.Physics.Matter.Events.CollisionEndEvent) => {
+      if (!this.cart?.rearWheel || this.gameOver) return;
+      for (const pair of event.pairs) {
+        const bodies = [pair.bodyA, pair.bodyB];
+        const involvesRear = bodies.some((b) => b.id === this.cart?.rearWheel?.id);
+        if (!involvesRear) continue;
+        this.rearGrounded = false;
       }
     });
 
@@ -240,6 +400,7 @@ export class WheelieScene extends Phaser.Scene {
         }
 
         if (isGround) {
+          this.spawnSparksIfScrape();
           const deg = this.normalizeAngleDeg(this.cart.chassis.angle);
           const upsideDown = deg > 150 && deg < 330;
           if (upsideDown) {
@@ -319,37 +480,201 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private createHud(): void {
-    this.statusText = this.add.text(16, 16, "Hold space/click/touch to throttle", {
-      fontSize: "18px",
+    const card1 = this.add.rectangle(12, 10, 190, 64, 0x0b1224, 0.6)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setStrokeStyle(1, 0x38bdf8, 0.35);
+
+    const card2 = this.add.rectangle(12, 84, 210, 74, 0x0b1224, 0.6)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setStrokeStyle(1, 0xfef3c7, 0.35);
+
+    const iconSpeed = this.add.triangle(24, 28, 0, 0, 12, 6, 0, 12, 0x38bdf8, 0.95).setScrollFactor(0);
+    iconSpeed.setRotation(Phaser.Math.DegToRad(90));
+    this.statusText = this.add.text(40, 16, "Hold space/click/touch to throttle", {
+      fontSize: "16px",
       color: "#e2e8f0",
     }).setScrollFactor(0);
 
-    this.speedText = this.add.text(16, 42, "Speed: 0", {
+    this.speedText = this.add.text(40, 34, "Speed: 0", {
       fontSize: "16px",
       color: "#a5f3fc",
     }).setScrollFactor(0);
 
-    this.distanceText = this.add.text(16, 64, "Distance: 0 m", {
+    const iconDistance = this.add.rectangle(24, 60, 10, 14, 0xfef08a, 0.95).setScrollFactor(0);
+    this.distanceText = this.add.text(40, 54, "Distance: 0 m", {
       fontSize: "16px",
       color: "#fef08a",
     }).setScrollFactor(0);
 
-    this.bestText = this.add.text(16, 86, `Best: ${this.bestDistance.toFixed(1)} m`, {
+    const iconBest = this.add.star(24, 98, 5, 5, 10, 0xfde68a, 0.9).setScrollFactor(0);
+    this.bestText = this.add.text(40, 90, `Best: ${this.bestDistance.toFixed(1)} m`, {
       fontSize: "14px",
       color: "#fde68a",
     }).setScrollFactor(0);
 
-    this.angleText = this.add.text(16, 108, "Angle: 0°", {
+    const iconDaily = this.add.circle(24, 114, 6, 0xf59e0b, 0.9).setScrollFactor(0);
+    this.dailyText = this.add.text(40, 108, `Today: ${this.dailyBest.toFixed(1)} m`, {
+      fontSize: "14px",
+      color: "#fcd34d",
+    }).setScrollFactor(0);
+
+    const iconSession = this.add.rectangle(24, 132, 10, 10, 0x38bdf8, 0.9).setScrollFactor(0);
+    this.sessionText = this.add.text(40, 126, `Session: ${this.sessionBest.toFixed(1)} m`, {
+      fontSize: "14px",
+      color: "#bae6fd",
+    }).setScrollFactor(0);
+
+    this.angleText = this.add.text(40, 144, "Angle: 0°", {
       fontSize: "14px",
       color: "#bbf7d0",
     }).setScrollFactor(0);
+
+    [card1, card2, iconSpeed, iconDistance, iconBest, iconDaily, iconSession].forEach((obj) => obj.setDepth(20));
+    [this.statusText, this.speedText, this.distanceText, this.bestText, this.dailyText, this.sessionText, this.angleText].forEach((obj) => obj?.setDepth(21));
+  }
+
+  private updateBackdrop(distanceMeters: number): void {
+    const t = Phaser.Math.Clamp(distanceMeters / 800, 0, 1);
+    const steps = 100;
+    const skyColor = Phaser.Display.Color.Interpolate.ColorWithColor(
+      Phaser.Display.Color.IntegerToColor(0x0b1224),
+      Phaser.Display.Color.IntegerToColor(0x1a1230),
+      steps,
+      t * steps,
+    );
+    const skyHex = Phaser.Display.Color.GetColor(skyColor.r, skyColor.g, skyColor.b);
+    this.skyLayer?.setFillStyle(skyHex, 1);
+
+    const hillStart = [0x0f172a, 0x13203a, 0x1a2c4a];
+    const hillEnd = [0x1a1d3a, 0x20284a, 0x28375c];
+    this.hillLayers.forEach((hill, idx) => {
+      const col = Phaser.Display.Color.Interpolate.ColorWithColor(
+        Phaser.Display.Color.IntegerToColor(hillStart[idx] ?? hillStart[0]),
+        Phaser.Display.Color.IntegerToColor(hillEnd[idx] ?? hillEnd[0]),
+        steps,
+        t * steps,
+      );
+      hill.setFillStyle(Phaser.Display.Color.GetColor(col.r, col.g, col.b), 1);
+    });
+
+    this.hazeBands.forEach((band, i) => {
+      const opacity = 0.12 + i * 0.02 + t * 0.06;
+      band.setFillStyle(0x38bdf8, opacity);
+    });
+  }
+
+  private spawnClouds(): void {
+    const colors = [0xe2e8f0, 0xcbd5e1, 0xbdd7f2];
+    this.clouds = [];
+    for (let i = 0; i < 6; i += 1) {
+      const w = Phaser.Math.Between(80, 140);
+      const h = Phaser.Math.Between(28, 44);
+      const x = Phaser.Math.Between(-200, this.scale.width * 2);
+      const y = Phaser.Math.Between(40, 180);
+      const color = colors[i % colors.length];
+      const cloud = this.add.ellipse(x, y, w, h, color, 0.25).setScrollFactor(0.14).setDepth(-17);
+      this.clouds.push(cloud);
+      this.driftCloud(cloud);
+    }
+  }
+
+  private driftCloud(cloud: Phaser.GameObjects.Ellipse): void {
+    const targetX = -240;
+    const duration = Phaser.Math.Between(20000, 32000);
+    this.tweens.add({
+      targets: cloud,
+      x: targetX,
+      duration,
+      onComplete: () => {
+        cloud.x = this.scale.width * 2 + Phaser.Math.Between(20, 120);
+        cloud.y = Phaser.Math.Between(40, 180);
+        this.driftCloud(cloud);
+      },
+    });
+  }
+
+  private spawnDistantProps(): void {
+    this.distantProps = [];
+    const baseY = this.scale.height * 0.78;
+    const spacing = 520;
+    for (let i = 0; i < 4; i += 1) {
+      const x = -120 + i * spacing + Phaser.Math.Between(-40, 80);
+      const mast = this.add.rectangle(x, baseY, 10, 140, 0x0f172a, 0.55).setScrollFactor(0.32).setDepth(-8);
+      const hub = this.add.circle(x, baseY - 60, 8, 0x475569, 0.6).setScrollFactor(0.32).setDepth(-7);
+      const blade = this.add.rectangle(x, baseY - 60, 6, 90, 0xcbd5e1, 0.55).setScrollFactor(0.32).setDepth(-7);
+      this.tweens.add({ targets: blade, angle: 360, duration: 4200 + i * 260, repeat: -1 });
+      this.distantProps.push(mast, hub, blade);
+    }
+  }
+
+  private checkMilestones(distanceMeters: number): void {
+    if (distanceMeters < this.nextMilestone) return;
+    const milestoneHit = this.nextMilestone;
+    this.nextMilestone += this.milestoneInterval;
+    this.celebrateMilestone(milestoneHit);
+  }
+
+  private celebrateMilestone(milestone: number): void {
+    this.stall.value = Math.max(0, this.stall.value - 20);
+    if (this.cart?.chassis) {
+      Body.applyForce(this.cart.chassis, this.cart.chassis.position, Vector.create(0.004, -0.0012));
+    }
+
+    const cx = this.cameras.main.midPoint.x;
+    const cy = this.cameras.main.midPoint.y - 120;
+    const banner = this.add.text(cx, cy, `Milestone ${milestone} m\n+stall relief`, {
+      fontSize: "18px",
+      color: "#fef08a",
+      align: "center",
+      backgroundColor: "#0b1224",
+      padding: { x: 10, y: 6 },
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(30);
+
+    this.tweens.add({
+      targets: banner,
+      alpha: 0,
+      y: cy - 24,
+      duration: 900,
+      onComplete: () => banner.destroy(),
+    });
+  }
+
+  private createGhostMarker(): void {
+    this.ghostMarker = this.add.circle(0, 0, 10, 0x38bdf8, 0.28).setDepth(9);
+    this.ghostMarker.setStrokeStyle(1, 0x38bdf8, 0.6);
+    this.updateGhostPosition();
+  }
+
+  private updateGhostPosition(): void {
+    if (!this.ghostMarker) return;
+    const targetBest = Math.max(this.bestDistance, this.dailyBest, this.sessionBest);
+    const x = this.startX + targetBest * 100;
+    this.ghostMarker.setPosition(x, this.startYForGhost());
+  }
+
+  private startYForGhost(): number {
+    return this.cart?.chassis ? this.cart.chassis.position.y : 360;
   }
 
   private updateBestDistance(distance: number): void {
-    if (distance <= this.bestDistance) return;
-    this.bestDistance = distance;
-    this.bestText?.setText(`Best: ${distance.toFixed(1)} m`);
-    this.saveBestDistance(distance);
+    if (distance > this.bestDistance) {
+      this.bestDistance = distance;
+      this.bestText?.setText(`Best: ${distance.toFixed(1)} m`);
+      this.saveBestDistance(distance);
+    }
+
+    if (distance > this.dailyBest) {
+      this.dailyBest = distance;
+      this.saveDailyBest(distance);
+      this.dailyText?.setText(`Today: ${distance.toFixed(1)} m`);
+    }
+
+    if (distance > this.sessionBest) {
+      this.sessionBest = distance;
+      this.sessionText?.setText(`Session: ${distance.toFixed(1)} m`);
+    }
   }
 
   private loadBestDistance(): number {
@@ -364,12 +689,41 @@ export class WheelieScene extends Phaser.Scene {
     }
   }
 
+  private loadDailyBest(): number {
+    try {
+      const raw = localStorage.getItem(this.dailyBestStorageKey);
+      if (!raw) return 0;
+      const [datePart, valPart] = raw.split(":");
+      const today = this.todayKey();
+      if (datePart !== today) return 0;
+      const parsed = parseFloat(valPart ?? raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch (err) {
+      console.warn("Failed to load daily best", err);
+      return 0;
+    }
+  }
+
   private saveBestDistance(distance: number): void {
     try {
       localStorage.setItem(this.bestStorageKey, distance.toFixed(1));
     } catch (err) {
       console.warn("Failed to save best distance", err);
     }
+  }
+
+  private saveDailyBest(distance: number): void {
+    try {
+      const payload = `${this.todayKey()}:${distance.toFixed(1)}`;
+      localStorage.setItem(this.dailyBestStorageKey, payload);
+    } catch (err) {
+      console.warn("Failed to save daily best", err);
+    }
+  }
+
+  private todayKey(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   }
 
   private triggerFail(reason: string): void {
