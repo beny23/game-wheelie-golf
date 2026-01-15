@@ -32,7 +32,7 @@ export class WheelieScene extends Phaser.Scene {
 
   private frontContactStart = 0;
 
-  private readonly frontContactThresholdMs = 250;
+  private readonly frontContactThresholdMs = 120;
 
   private cam?: Phaser.Cameras.Scene2D.Camera;
 
@@ -48,7 +48,9 @@ export class WheelieScene extends Phaser.Scene {
 
   private statusText?: Phaser.GameObjects.Text;
 
-  private stallText?: Phaser.GameObjects.Text;
+  private distanceText?: Phaser.GameObjects.Text;
+
+  private bestText?: Phaser.GameObjects.Text;
 
   private gameOver = false;
 
@@ -56,9 +58,17 @@ export class WheelieScene extends Phaser.Scene {
 
   private group?: number;
 
+  private startX = 0;
+
+  private bestDistance = 0;
+
+  private readonly bestStorageKey = "wheelie-best-distance";
+
   create(): void {
     this.groundCategory = this.matter.world.nextCategory();
     this.group = Body.nextGroup(true);
+
+    this.bestDistance = this.loadBestDistance();
 
     this.setupInput();
     this.createBackground();
@@ -135,6 +145,7 @@ export class WheelieScene extends Phaser.Scene {
     const group = this.group ?? Body.nextGroup(true);
     this.group = group;
     this.cart = createCart(this, group, startX, startY);
+    this.startX = startX;
 
     this.frontTouchIgnoreUntil = this.time.now + 1200;
     this.flipIgnoreUntil = this.time.now + 1200;
@@ -158,6 +169,13 @@ export class WheelieScene extends Phaser.Scene {
       const v = this.cart.chassis.velocity;
       const speed = Math.sqrt(v.x * v.x + v.y * v.y) * 60; // px/s approx
       this.speedText.setText(`Speed: ${speed.toFixed(0)}`);
+    }
+
+    if (this.cart?.chassis && this.distanceText) {
+      const dx = Math.max(0, this.cart.chassis.position.x - this.startX);
+      const meters = dx / 100;
+      this.distanceText.setText(`Distance: ${meters.toFixed(1)} m`);
+      this.updateBestDistance(meters);
     }
 
     if (this.cart?.chassis && this.angleText) {
@@ -268,8 +286,6 @@ export class WheelieScene extends Phaser.Scene {
     const change = this.throttle.active ? -this.stall.drainRate : this.stall.fillRate;
     this.stall.value = Phaser.Math.Clamp(this.stall.value + change * dt, 0, this.stall.max);
 
-    this.stallText?.setText(`Stall: ${this.stall.value.toFixed(0)} / ${this.stall.max}`);
-
     if (this.stall.value >= this.stall.max) {
       this.triggerFail("Stalled out — exploded!");
     }
@@ -308,25 +324,52 @@ export class WheelieScene extends Phaser.Scene {
       color: "#e2e8f0",
     }).setScrollFactor(0);
 
-    this.stallText = this.add.text(16, 42, "Stall: 0", {
-      fontSize: "16px",
-      color: "#cbd5f5",
-    }).setScrollFactor(0);
-
-    this.speedText = this.add.text(16, 64, "Speed: 0", {
+    this.speedText = this.add.text(16, 42, "Speed: 0", {
       fontSize: "16px",
       color: "#a5f3fc",
     }).setScrollFactor(0);
 
-    this.failReasonText = this.add.text(16, 86, "Last fail: -", {
-      fontSize: "14px",
-      color: "#fca5a5",
+    this.distanceText = this.add.text(16, 64, "Distance: 0 m", {
+      fontSize: "16px",
+      color: "#fef08a",
     }).setScrollFactor(0);
 
-    this.angleText = this.add.text(16, 106, "Angle: 0°", {
+    this.bestText = this.add.text(16, 86, `Best: ${this.bestDistance.toFixed(1)} m`, {
+      fontSize: "14px",
+      color: "#fde68a",
+    }).setScrollFactor(0);
+
+    this.angleText = this.add.text(16, 108, "Angle: 0°", {
       fontSize: "14px",
       color: "#bbf7d0",
     }).setScrollFactor(0);
+  }
+
+  private updateBestDistance(distance: number): void {
+    if (distance <= this.bestDistance) return;
+    this.bestDistance = distance;
+    this.bestText?.setText(`Best: ${distance.toFixed(1)} m`);
+    this.saveBestDistance(distance);
+  }
+
+  private loadBestDistance(): number {
+    try {
+      const raw = localStorage.getItem(this.bestStorageKey);
+      if (!raw) return 0;
+      const parsed = parseFloat(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch (err) {
+      console.warn("Failed to load best distance", err);
+      return 0;
+    }
+  }
+
+  private saveBestDistance(distance: number): void {
+    try {
+      localStorage.setItem(this.bestStorageKey, distance.toFixed(1));
+    } catch (err) {
+      console.warn("Failed to save best distance", err);
+    }
   }
 
   private triggerFail(reason: string): void {
