@@ -1,0 +1,27 @@
+# Node and build outputs
+node_modules
+.dist
+/dist
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs
+*.log
+
+# Local env
+.env
+.env.*
+
+# Editor junk
+.DS_Store
+.vscode/
+.idea/
+
+# Coverage
+coverage
+.nyc_output
+
+# Mac cruft
+.DS_Store
