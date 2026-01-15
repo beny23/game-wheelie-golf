@@ -12,6 +12,10 @@ export type Cart = {
   chassisRect: Phaser.GameObjects.Rectangle;
   rearWheelCircle: Phaser.GameObjects.Arc;
   frontWheelCircle: Phaser.GameObjects.Arc;
+  rearRim: Phaser.GameObjects.Arc;
+  frontRim: Phaser.GameObjects.Arc;
+  rearHub: Phaser.GameObjects.Arc;
+  frontHub: Phaser.GameObjects.Arc;
   details: CartDetail[];
   followTarget: Phaser.GameObjects.Zone;
 };
@@ -73,35 +77,35 @@ export function createCart(
 
   Body.applyForce(rearWheel, rearWheel.position, Vector.create(0.03, -0.001));
 
-  const chassisRect = scene.add.rectangle(startX, startY, 160, 36, 0x38bdf8, 0.95);
+  const chassisRect = scene.add.rectangle(startX, startY, 152, 32, 0x1fb6ad, 0.98);
   chassisRect.setDepth(5);
+  const chassisShadow = scene.add.rectangle(startX, startY + 6, 152, 10, 0x0f172a, 0.18);
+  chassisShadow.setDepth(4);
 
-  const rearWheelCircle = scene.add.circle(startX - 50, startY + 28, 28, 0x0ea5e9, 0.95);
+  const rearWheelCircle = scene.add.circle(startX - 50, startY + 26, 28, 0x0f172a, 0.98);
   rearWheelCircle.setDepth(6);
+  const rearWheelRim = scene.add.circle(startX - 50, startY + 26, 14, 0xe2e8f0, 0.95);
+  rearWheelRim.setDepth(7);
+  const rearWheelHub = scene.add.circle(startX - 50, startY + 26, 5, 0x1fb6ad, 0.95);
+  rearWheelHub.setDepth(8);
 
-  const frontWheelCircle = scene.add.circle(startX + 55, startY + 24, 22, 0x7dd3fc, 0.95);
+  const frontWheelCircle = scene.add.circle(startX + 55, startY + 22, 18, 0x0f172a, 0.98);
   frontWheelCircle.setDepth(6);
+  const frontWheelRim = scene.add.circle(startX + 55, startY + 22, 10, 0xe2e8f0, 0.95);
+  frontWheelRim.setDepth(7);
+  const frontWheelHub = scene.add.circle(startX + 55, startY + 22, 4, 0x1fb6ad, 0.95);
+  frontWheelHub.setDepth(8);
 
   const followTarget = scene.add.zone(startX, startY, 10, 10);
 
-  addCartDetail(details, scene.add.rectangle(startX + 8, startY - 28, 126, 12, 0xe2e8f0, 0.95), 8, -28);
-  addCartDetail(details, scene.add.rectangle(startX - 44, startY - 2, 10, 52, 0x0ea5e9, 0.9), -44, -2);
-  addCartDetail(details, scene.add.rectangle(startX + 32, startY - 6, 68, 8, 0x1f2937, 0.9), 32, -6);
-  addCartDetail(details, scene.add.rectangle(startX - 6, startY + 6, 90, 18, 0xf8fafc, 0.95), -6, 6);
-  addCartDetail(details, scene.add.rectangle(startX - 6, startY - 10, 90, 8, 0x94a3b8, 0.95), -6, -10);
-  addCartDetail(details, scene.add.rectangle(startX + 76, startY + 10, 44, 10, 0x0ea5e9, 0.85), 76, 10);
-  addCartDetail(
-    details,
-    scene.add.triangle(startX + 26, startY - 14, -12, 16, 40, 16, -12, -6, 0xcbd5f5, 0.55),
-    26,
-    -14,
-  );
-  addCartDetail(details, scene.add.rectangle(startX - 78, startY - 6, 18, 58, 0x78350f, 0.96), -78, -6);
-  addCartDetail(details, scene.add.rectangle(startX - 78, startY - 6, 6, 62, 0xfbbf24, 0.95), -78, -6);
-  addCartDetail(details, scene.add.rectangle(startX - 82, startY - 38, 6, 46, 0xd9e3f0, 0.95), -82, -38, Phaser.Math.DegToRad(-10));
-  addCartDetail(details, scene.add.rectangle(startX - 90, startY - 14, 20, 6, 0x1f2937, 0.95), -90, -14, Phaser.Math.DegToRad(-10));
-  addCartDetail(details, scene.add.rectangle(startX - 72, startY - 36, 6, 44, 0xd9e3f0, 0.95), -72, -36, Phaser.Math.DegToRad(-6));
-  addCartDetail(details, scene.add.rectangle(startX - 80, startY - 12, 18, 6, 0x1f2937, 0.95), -80, -12, Phaser.Math.DegToRad(-6));
+  // Minimal open cart: roof bar, mid struts anchored to chassis top, simple seat/back, tiny bonnet.
+  addCartDetail(details, scene.add.rectangle(startX + 4, startY - 46, 120, 8, 0xf8fafc, 0.95), 4, -46);
+  addCartDetail(details, scene.add.rectangle(startX - 20, startY - 12, 8, 44, 0x0b5560, 0.9), -20, -12);
+  addCartDetail(details, scene.add.rectangle(startX + 38, startY - 12, 8, 44, 0x0b5560, 0.9), 38, -12);
+  addCartDetail(details, scene.add.rectangle(startX, startY + 10, 104, 18, 0xf8fafc, 0.95), 0, 10);
+  addCartDetail(details, scene.add.rectangle(startX, startY - 4, 102, 8, 0xd9e3f0, 0.95), 0, -4);
+  addCartDetail(details, scene.add.rectangle(startX + 58, startY - 2, 44, 8, 0x0f172a, 0.8), 58, -2);
+  // removed golf bag and clubs for a cleaner silhouette
 
   return {
     chassis,
@@ -110,22 +114,47 @@ export function createCart(
     chassisRect,
     rearWheelCircle,
     frontWheelCircle,
+    rearRim: rearWheelRim,
+    frontRim: frontWheelRim,
+    rearHub: rearWheelHub,
+    frontHub: frontWheelHub,
     details,
     followTarget,
   };
 }
 
 export function syncCartVisuals(cart: Cart): void {
-  const { chassis, rearWheel, frontWheel, chassisRect, rearWheelCircle, frontWheelCircle, details, followTarget } = cart;
+  const {
+    chassis,
+    rearWheel,
+    frontWheel,
+    chassisRect,
+    rearWheelCircle,
+    frontWheelCircle,
+    rearRim,
+    frontRim,
+    rearHub,
+    frontHub,
+    details,
+    followTarget,
+  } = cart;
 
   chassisRect.setPosition(chassis.position.x, chassis.position.y);
   chassisRect.setRotation(chassis.angle);
 
   rearWheelCircle.setPosition(rearWheel.position.x, rearWheel.position.y);
   rearWheelCircle.setRotation(rearWheel.angle);
+  rearRim.setPosition(rearWheel.position.x, rearWheel.position.y);
+  rearRim.setRotation(rearWheel.angle);
+  rearHub.setPosition(rearWheel.position.x, rearWheel.position.y);
+  rearHub.setRotation(rearWheel.angle);
 
   frontWheelCircle.setPosition(frontWheel.position.x, frontWheel.position.y);
   frontWheelCircle.setRotation(frontWheel.angle);
+  frontRim.setPosition(frontWheel.position.x, frontWheel.position.y);
+  frontRim.setRotation(frontWheel.angle);
+  frontHub.setPosition(frontWheel.position.x, frontWheel.position.y);
+  frontHub.setRotation(frontWheel.angle);
 
   const angle = chassis.angle;
   const cos = Math.cos(angle);
