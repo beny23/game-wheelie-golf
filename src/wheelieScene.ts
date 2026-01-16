@@ -126,6 +126,7 @@ export class WheelieScene extends Phaser.Scene {
     this.checkFrontContact();
     this.stabilizePitch(dt);
     this.syncVisuals();
+    this.updateParallaxElements(dt);
   }
 
   private setupInput(): void {
@@ -306,6 +307,54 @@ export class WheelieScene extends Phaser.Scene {
         duration: Phaser.Math.Between(180, 260),
         onComplete: () => spark.destroy(),
       });
+    }
+  }
+
+  private parallaxWorldX(screenX: number, factor: number): number {
+    const camX = this.cameras.main?.scrollX ?? 0;
+    return camX * factor + screenX;
+  }
+
+  private screenXFromWorldX(worldX: number, factor: number): number {
+    const camX = this.cameras.main?.scrollX ?? 0;
+    return worldX - camX * factor;
+  }
+
+  private updateParallaxElements(dt: number): void {
+    const cam = this.cameras.main;
+    if (!cam) return;
+    const width = this.scale.width;
+
+    // Clouds: position from baseX and wrap baseX when out of band.
+    const cloudSpan = width * 1.6;
+    for (const cloud of this.clouds) {
+      const factor = cloud.scrollFactorX ?? 0.14;
+      let baseX = (cloud.getData("baseX") as number) ?? 0;
+      baseX -= 10 * dt; // slow left drift
+      if (baseX < -width * 0.4) baseX += cloudSpan;
+      if (baseX > width * 1.2) baseX -= cloudSpan;
+      cloud.setData("baseX", baseX);
+      cloud.x = this.parallaxWorldX(baseX, factor);
+    }
+
+    // Distant props (windmills): use baseX and wrap.
+    const propSpan = width * 1.8;
+    for (let i = 0; i < this.distantProps.length; i += 3) {
+      const mast = this.distantProps[i] as Phaser.GameObjects.Rectangle | undefined;
+      const hub = this.distantProps[i + 1] as Phaser.GameObjects.Arc | undefined;
+      const blade = this.distantProps[i + 2] as Phaser.GameObjects.Rectangle | undefined;
+      if (!mast || !hub || !blade) continue;
+      const factor = mast.scrollFactorX ?? 0.32;
+      let baseX = (mast.getData("baseX") as number) ?? 0;
+      baseX -= 14 * dt; // slow left drift for props
+      if (baseX < -width * 0.5) baseX += propSpan;
+      if (baseX > width * 1.3) baseX -= propSpan;
+      mast.setData("baseX", baseX);
+      const worldX = this.parallaxWorldX(baseX, factor);
+      const dx = worldX - mast.x;
+      mast.x += dx;
+      hub.x += dx;
+      blade.x += dx;
     }
   }
 
@@ -571,28 +620,14 @@ export class WheelieScene extends Phaser.Scene {
     for (let i = 0; i < 6; i += 1) {
       const w = Phaser.Math.Between(80, 140);
       const h = Phaser.Math.Between(28, 44);
-      const x = Phaser.Math.Between(-200, this.scale.width * 2);
+      const screenX = Phaser.Math.Between(Math.floor(-this.scale.width * 0.2), Math.floor(this.scale.width * 1.2));
+      const x = this.parallaxWorldX(screenX, 0.14);
       const y = Phaser.Math.Between(40, 180);
       const color = colors[i % colors.length];
-      const cloud = this.add.ellipse(x, y, w, h, color, 0.25).setScrollFactor(0.14).setDepth(-17);
+      const cloud = this.add.ellipse(x, y, w, h, color, 0.24).setScrollFactor(0.14).setDepth(-17);
+      cloud.setData("baseX", screenX);
       this.clouds.push(cloud);
-      this.driftCloud(cloud);
     }
-  }
-
-  private driftCloud(cloud: Phaser.GameObjects.Ellipse): void {
-    const targetX = -240;
-    const duration = Phaser.Math.Between(20000, 32000);
-    this.tweens.add({
-      targets: cloud,
-      x: targetX,
-      duration,
-      onComplete: () => {
-        cloud.x = this.scale.width * 2 + Phaser.Math.Between(20, 120);
-        cloud.y = Phaser.Math.Between(40, 180);
-        this.driftCloud(cloud);
-      },
-    });
   }
 
   private spawnDistantProps(): void {
@@ -600,8 +635,10 @@ export class WheelieScene extends Phaser.Scene {
     const baseY = this.scale.height * 0.78;
     const spacing = 520;
     for (let i = 0; i < 4; i += 1) {
-      const x = -120 + i * spacing + Phaser.Math.Between(-40, 80);
+      const screenX = -120 + i * spacing + Phaser.Math.Between(-40, 80);
+      const x = this.parallaxWorldX(screenX, 0.32);
       const mast = this.add.rectangle(x, baseY, 10, 140, 0x0f172a, 0.55).setScrollFactor(0.32).setDepth(-8);
+      mast.setData("baseX", screenX);
       const hub = this.add.circle(x, baseY - 60, 8, 0x475569, 0.6).setScrollFactor(0.32).setDepth(-7);
       const blade = this.add.rectangle(x, baseY - 60, 6, 90, 0xcbd5e1, 0.55).setScrollFactor(0.32).setDepth(-7);
       this.tweens.add({ targets: blade, angle: 360, duration: 4200 + i * 260, repeat: -1 });
