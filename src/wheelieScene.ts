@@ -17,6 +17,17 @@ type StallMeter = {
   drainRate: number;
 };
 
+type ParallaxProp = {
+  items: Phaser.GameObjects.GameObject[];
+  factor: number;
+  baseX: number;
+  span: number;
+  drift: number;
+  bobAmplitude?: number;
+  bobSpeed?: number;
+  bobPhase?: number;
+};
+
 export class WheelieScene extends Phaser.Scene {
   private throttle: ThrottleState = { active: false, lastChange: 0 };
 
@@ -61,7 +72,7 @@ export class WheelieScene extends Phaser.Scene {
 
   private clouds: Phaser.GameObjects.Ellipse[] = [];
 
-  private distantProps: Phaser.GameObjects.GameObject[] = [];
+  private parallaxProps: ParallaxProp[] = [];
 
   private rearGrounded = false;
 
@@ -169,7 +180,7 @@ export class WheelieScene extends Phaser.Scene {
     }
 
     this.spawnClouds();
-    this.spawnDistantProps();
+    this.spawnParallaxProps();
   }
 
   private createCourse(): void {
@@ -331,24 +342,29 @@ export class WheelieScene extends Phaser.Scene {
       cloud.x = this.parallaxWorldX(baseX, factor);
     }
 
-    // Distant props (windmills): use baseX and wrap.
-    const propSpan = width * 1.8;
-    for (let i = 0; i < this.distantProps.length; i += 3) {
-      const mast = this.distantProps[i] as Phaser.GameObjects.Rectangle | undefined;
-      const hub = this.distantProps[i + 1] as Phaser.GameObjects.Arc | undefined;
-      const blade = this.distantProps[i + 2] as Phaser.GameObjects.Rectangle | undefined;
-      if (!mast || !hub || !blade) continue;
-      const factor = mast.scrollFactorX ?? 0.32;
-      let baseX = (mast.getData("baseX") as number) ?? 0;
-      baseX -= 14 * dt; // slow left drift for props
-      if (baseX < -width * 0.5) baseX += propSpan;
-      if (baseX > width * 1.3) baseX -= propSpan;
-      mast.setData("baseX", baseX);
-      const worldX = this.parallaxWorldX(baseX, factor);
-      const dx = worldX - mast.x;
-      mast.x += dx;
-      hub.x += dx;
-      blade.x += dx;
+    // Horizon and sky props with drift and optional bob.
+    for (const prop of this.parallaxProps) {
+      prop.baseX += prop.drift * dt;
+      if (prop.baseX < -width * 0.6) prop.baseX += prop.span;
+      if (prop.baseX > width * 1.4) prop.baseX -= prop.span;
+
+      const targetX = this.parallaxWorldX(prop.baseX, prop.factor);
+      const current = (prop.items[0] as Phaser.GameObjects.Shape | undefined)?.x ?? targetX;
+      const dx = targetX - current;
+
+      const bob =
+        prop.bobAmplitude && prop.bobSpeed
+          ? Math.sin((this.time.now / 1000) * prop.bobSpeed + (prop.bobPhase ?? 0)) * prop.bobAmplitude
+          : 0;
+
+      prop.items.forEach((item) => {
+        const shape = item as Phaser.GameObjects.Shape;
+        shape.x += dx;
+        const baseY = shape.getData("baseY") as number | undefined;
+        if (baseY !== undefined) {
+          shape.y = baseY + bob;
+        }
+      });
     }
   }
 
@@ -624,20 +640,139 @@ export class WheelieScene extends Phaser.Scene {
     }
   }
 
-  private spawnDistantProps(): void {
-    this.distantProps = [];
-    const baseY = this.scale.height * 0.78;
-    const spacing = 520;
-    for (let i = 0; i < 4; i += 1) {
-      const screenX = -120 + i * spacing + Phaser.Math.Between(-40, 80);
-      const x = this.parallaxWorldX(screenX, 0.32);
-      const mast = this.add.rectangle(x, baseY, 10, 140, 0x0f172a, 0.55).setScrollFactor(0.32).setDepth(-8);
-      mast.setData("baseX", screenX);
-      const hub = this.add.circle(x, baseY - 60, 8, 0x475569, 0.6).setScrollFactor(0.32).setDepth(-7);
-      const blade = this.add.rectangle(x, baseY - 60, 6, 90, 0xcbd5e1, 0.55).setScrollFactor(0.32).setDepth(-7);
-      this.tweens.add({ targets: blade, angle: 360, duration: 4200 + i * 260, repeat: -1 });
-      this.distantProps.push(mast, hub, blade);
-    }
+  private spawnParallaxProps(): void {
+    this.parallaxProps = [];
+
+    const width = this.scale.width;
+    const horizonY = this.scale.height * 0.78;
+    const positions = Array.from({ length: 7 }, (_v, i) => -140 + i * width * 0.42 + Phaser.Math.Between(-80, 80));
+
+    const addProp = (
+      items: Phaser.GameObjects.GameObject[],
+      factor: number,
+      baseX: number,
+      span: number,
+      drift: number,
+      bobAmplitude?: number,
+      bobSpeed?: number,
+    ): void => {
+      items.forEach((item) => {
+        const shape = item as Phaser.GameObjects.Shape;
+        shape.setScrollFactor(factor);
+        shape.setData("baseY", shape.y);
+      });
+
+      this.parallaxProps.push({
+        items,
+        factor,
+        baseX,
+        span,
+        drift,
+        bobAmplitude,
+        bobSpeed,
+        bobPhase: Phaser.Math.FloatBetween(0, Math.PI * 2),
+      });
+    };
+
+    const spawnWindmill = (screenX: number, idx: number): void => {
+      const factor = 0.32;
+      const x = this.parallaxWorldX(screenX, factor);
+      const mast = this.add.rectangle(x, horizonY, 10, 140, 0x0f172a, 0.55).setDepth(-8);
+      const hub = this.add.circle(x, horizonY - 60, 8, 0x475569, 0.6).setDepth(-7);
+      const blade = this.add.rectangle(x, horizonY - 60, 6, 90, 0xcbd5e1, 0.55).setDepth(-7);
+      this.tweens.add({ targets: blade, angle: 360, duration: 4200 + idx * 260, repeat: -1 });
+      addProp([mast, hub, blade], factor, screenX, width * 1.8, -14);
+    };
+
+    const spawnRadioTower = (screenX: number): void => {
+      const factor = 0.3;
+      const x = this.parallaxWorldX(screenX, factor);
+      const tower = this.add.rectangle(x, horizonY - 6, 12, 160, 0x13203a, 0.65).setDepth(-8);
+      const cross1 = this.add.rectangle(x, horizonY - 40, 80, 4, 0x1f2937, 0.4).setDepth(-8);
+      const cross2 = this.add.rectangle(x, horizonY - 80, 70, 4, 0x1f2937, 0.4).setDepth(-8);
+      const beacon = this.add.circle(x, horizonY - 86, 6, 0xf472b6, 0.8).setDepth(-7);
+      this.tweens.add({ targets: beacon, alpha: 0.2, duration: 900, yoyo: true, repeat: -1 });
+      addProp([tower, cross1, cross2, beacon], factor, screenX, width * 1.7, -12);
+    };
+
+    const spawnWaterTower = (screenX: number): void => {
+      const factor = 0.31;
+      const x = this.parallaxWorldX(screenX, factor);
+      const legs = [
+        this.add.rectangle(x - 18, horizonY + 6, 6, 120, 0x0f172a, 0.55),
+        this.add.rectangle(x + 18, horizonY + 6, 6, 120, 0x0f172a, 0.55),
+      ];
+      const tank = this.add.circle(x, horizonY - 32, 32, 0x1f2937, 0.7).setDepth(-7);
+      const band = this.add.rectangle(x, horizonY - 32, 64, 10, 0x38bdf8, 0.5).setDepth(-7);
+      addProp([...legs, tank, band], factor, screenX, width * 1.6, -11);
+    };
+
+    const spawnConstructionCrane = (screenX: number): void => {
+      const factor = 0.34;
+      const x = this.parallaxWorldX(screenX, factor);
+      const mast = this.add.rectangle(x, horizonY, 14, 170, 0x1a2c4a, 0.65).setDepth(-8);
+      const boom = this.add.rectangle(x + 70, horizonY - 90, 160, 12, 0xfbbf24, 0.55).setDepth(-8);
+      const counter = this.add.rectangle(x - 28, horizonY - 90, 46, 28, 0xf59e0b, 0.7).setDepth(-7);
+      const cable = this.add.rectangle(x + 122, horizonY - 44, 4, 90, 0x94a3b8, 0.5).setDepth(-7);
+      const hook = this.add.rectangle(x + 122, horizonY + 6, 14, 16, 0x0f172a, 0.8).setDepth(-7);
+      addProp([mast, boom, counter, cable, hook], factor, screenX, width * 1.8, -10);
+    };
+
+    const spawnBlimp = (screenX: number): void => {
+      const factor = 0.2;
+      const y = Phaser.Math.Between(110, 180);
+      const x = this.parallaxWorldX(screenX, factor);
+      const body = this.add.ellipse(x, y, 180, 64, 0xcbd5e1, 0.4).setDepth(-16);
+      const stripe = this.add.rectangle(x, y, 120, 12, 0x38bdf8, 0.55).setDepth(-15);
+      const tail = this.add.triangle(x - 82, y, x - 110, y - 14, x - 110, y + 14, x - 82, y, 0x94a3b8, 0.6).setDepth(-15);
+      const cabin = this.add.rectangle(x + 30, y + 18, 36, 12, 0x0f172a, 0.7).setDepth(-14);
+      addProp([body, stripe, tail, cabin], factor, screenX, width * 1.6, -8, 5, 1.4);
+    };
+
+    const spawnHotAirBalloon = (screenX: number): void => {
+      const factor = 0.18;
+      const y = Phaser.Math.Between(90, 160);
+      const x = this.parallaxWorldX(screenX, factor);
+      const fill = Phaser.Math.RND.pick([0xf472b6, 0x38bdf8, 0xfbbf24]);
+      const envelope = this.add.ellipse(x, y, 90, 110, fill, 0.55).setDepth(-17);
+      const band = this.add.rectangle(x, y + 10, 80, 14, 0xf1f5f9, 0.5).setDepth(-16);
+      const lines = this.add.rectangle(x, y + 60, 2, 42, 0x0f172a, 0.5).setDepth(-15);
+      const basket = this.add.rectangle(x, y + 84, 36, 16, 0x1f2937, 0.8).setDepth(-15);
+      addProp([envelope, band, lines, basket], factor, screenX, width * 1.5, -7, 6, 1.8);
+    };
+
+    positions.forEach((screenX, idx) => {
+      const choice = Phaser.Math.RND.pick([
+        "windmill",
+        "radio",
+        "water",
+        "crane",
+        "blimp",
+        "balloon",
+      ]);
+
+      switch (choice) {
+        case "windmill":
+          spawnWindmill(screenX, idx);
+          break;
+        case "radio":
+          spawnRadioTower(screenX);
+          break;
+        case "water":
+          spawnWaterTower(screenX);
+          break;
+        case "crane":
+          spawnConstructionCrane(screenX);
+          break;
+        case "blimp":
+          spawnBlimp(screenX);
+          break;
+        case "balloon":
+        default:
+          spawnHotAirBalloon(screenX);
+          break;
+      }
+    });
   }
 
   private checkMilestones(distanceMeters: number): void {
