@@ -38,9 +38,6 @@ export class WheelieScene extends Phaser.Scene {
 
   private speedText?: Phaser.GameObjects.Text;
 
-  private failReasonText?: Phaser.GameObjects.Text;
-
-  private lastFailReason = "";
 
   private angleText?: Phaser.GameObjects.Text;
 
@@ -131,9 +128,6 @@ export class WheelieScene extends Phaser.Scene {
 
   private setupInput(): void {
     this.input.keyboard?.addCapture("SPACE");
-    window.addEventListener("keydown", (e) => {
-      if (e.code === "Space") e.preventDefault();
-    });
 
     this.input.keyboard?.on("keydown-SPACE", () => this.setThrottle(true));
     this.input.keyboard?.on("keyup-SPACE", () => this.setThrottle(false));
@@ -766,9 +760,6 @@ export class WheelieScene extends Phaser.Scene {
   private triggerFail(reason: string): void {
     if (this.gameOver) return;
     this.gameOver = true;
-
-    this.lastFailReason = reason;
-    this.failReasonText?.setText(`Last fail: ${reason}`);
     console.warn("Fail reason:", reason);
 
     this.addRectangleFlash();
