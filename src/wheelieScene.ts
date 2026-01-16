@@ -96,6 +96,8 @@ export class WheelieScene extends Phaser.Scene {
 
   private gameOver = false;
 
+  private pendingRestart = false;
+
   private groundCategory?: number;
 
   private group?: number;
@@ -107,6 +109,11 @@ export class WheelieScene extends Phaser.Scene {
   private readonly bestStorageKey = "wheelie-best-distance";
 
   create(): void {
+    this.gameOver = false;
+    this.pendingRestart = false;
+    this.throttle = { active: false, lastChange: this.time.now };
+    this.stall.value = 0;
+
     this.groundCategory = this.matter.world.nextCategory();
     this.group = Body.nextGroup(true);
 
@@ -148,6 +155,12 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private setThrottle(active: boolean): void {
+    if (this.pendingRestart && active) {
+      this.pendingRestart = false;
+      this.scene.restart();
+      return;
+    }
+
     this.throttle = { active, lastChange: this.time.now };
   }
 
@@ -898,10 +911,15 @@ export class WheelieScene extends Phaser.Scene {
     console.warn("Fail reason:", reason);
 
     this.addRectangleFlash();
+    this.cameras.main.shake(180, 0.004);
 
-    const cx = this.cameras.main.midPoint.x;
-    const cy = this.cameras.main.midPoint.y - 60;
-    this.add.text(cx, cy, `Failed: ${reason}\nPress space/click to retry`, {
+    const explosionOrigin = this.cart?.chassis?.position ?? this.cameras.main.midPoint;
+    this.spawnExplosion(explosionOrigin);
+
+    const cam = this.cameras.main;
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+    const prompt = this.add.text(cx, cy, `Failed: ${reason}\nPress throttle to restart`, {
       fontSize: "22px",
       color: "#f472b6",
       align: "center",
@@ -909,12 +927,12 @@ export class WheelieScene extends Phaser.Scene {
       padding: { x: 10, y: 8 },
     })
       .setOrigin(0.5)
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setStroke("#0f172a", 2.4)
+      .setShadow(0, 2, "#000000", 8, false, true);
 
-    this.time.delayedCall(200, () => {
-      this.input.once("pointerdown", () => this.scene.restart());
-      this.input.keyboard?.once("keydown-SPACE", () => this.scene.restart());
-    });
+    this.pendingRestart = true;
   }
 
   private addRectangleFlash(): void {
@@ -927,6 +945,57 @@ export class WheelieScene extends Phaser.Scene {
       duration: 300,
       onComplete: () => flash.destroy(),
     });
+  }
+
+  private spawnExplosion(origin: Phaser.Types.Math.Vector2Like): void {
+    const ring = this.add.circle(origin.x, origin.y, 12, 0xf43f5e, 0.45).setDepth(12);
+    this.tweens.add({
+      targets: ring,
+      scale: 3.2,
+      alpha: 0,
+      duration: 380,
+      ease: "Cubic.Out",
+      onComplete: () => ring.destroy(),
+    });
+
+    const shards = Phaser.Math.Between(16, 22);
+    for (let i = 0; i < shards; i += 1) {
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const speed = Phaser.Math.Between(120, 220);
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      const size = Phaser.Math.Between(6, 12);
+      const color = Phaser.Math.RND.pick([0xfbbf24, 0xf472b6, 0xfcd34d]);
+      const shard = this.add.triangle(origin.x, origin.y, 0, 0, size, size * 0.6, 0, size, color, 0.9).setDepth(13);
+      this.tweens.add({
+        targets: shard,
+        x: shard.x + vx,
+        y: shard.y + vy,
+        angle: Phaser.Math.Between(-180, 180),
+        alpha: 0,
+        scale: 0.4,
+        duration: Phaser.Math.Between(420, 620),
+        ease: "Cubic.Out",
+        onComplete: () => shard.destroy(),
+      });
+    }
+
+    const smokePuffs = Phaser.Math.Between(6, 9);
+    for (let i = 0; i < smokePuffs; i += 1) {
+      const dx = Phaser.Math.FloatBetween(-24, 24);
+      const dy = Phaser.Math.FloatBetween(-20, 18);
+      const puff = this.add.circle(origin.x + dx, origin.y + dy, Phaser.Math.Between(16, 26), 0x0b1224, 0.5).setDepth(11);
+      this.tweens.add({
+        targets: puff,
+        x: puff.x + Phaser.Math.FloatBetween(-12, 12),
+        y: puff.y - Phaser.Math.Between(12, 26),
+        alpha: 0,
+        scale: 1.4,
+        duration: Phaser.Math.Between(520, 780),
+        ease: "Cubic.Out",
+        onComplete: () => puff.destroy(),
+      });
+    }
   }
 
   private normalizeAngleDeg(rad: number): number {
