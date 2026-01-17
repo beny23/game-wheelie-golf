@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { Cart, createCart, syncCartVisuals } from "./cart";
 import { CourseState, createCourse, ensureCourseAhead } from "./course";
+import { CollisionHandlers, createCollisionHandlers } from "./controls/collisions";
 import { stabilizePitch } from "./controls/pitch";
 import { frontContactExceeded, StallMeter, updateStallMeter } from "./controls/safety";
 import { applyThrottleForces } from "./controls/throttle";
@@ -43,6 +44,8 @@ export class WheelieScene extends Phaser.Scene {
   private cart?: Cart;
 
   private course?: CourseState;
+
+  private collisionHandlers?: CollisionHandlers;
 
   private frontTouchIgnoreUntil = 0;
 
@@ -401,112 +404,34 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private registerCollisionHandlers(): void {
-    this.matter.world.on("collisionstart", (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
-      if (!this.cart?.frontWheel || this.gameOver) return;
-      if (this.time.now < this.frontTouchIgnoreUntil) return;
-
-      for (const pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        const involvesFront = bodies.some((b) => b.id === this.cart?.frontWheel?.id);
-        if (!involvesFront) continue;
-
-        const other = bodies.find((b) => b.id !== this.cart?.frontWheel?.id);
-        if (!other) continue;
-
-        const isGround = other.label === "ground";
-        const isHazard = other.label === "hazard" || this.course?.hazardBodies.has(other.id);
-        if (isHazard) {
-          this.triggerFail("Front wheel touched down — boom!");
-          return;
-        }
-
-        if (isGround) {
-          const dx = this.cart.chassis.position.x - this.startX;
-          if (this.time.now < this.frontTouchIgnoreUntil || dx < tuning.front.distanceGatePx) {
-            continue;
-          }
-          this.frontContactStart = this.time.now;
-        }
-      }
+    if (!this.cart) return;
+    const handlers = createCollisionHandlers({
+      scene: this,
+      cart: this.cart,
+      courseHazards: this.course?.hazardBodies,
+      gameOver: () => this.gameOver,
+      frontTouchIgnoreUntil: () => this.frontTouchIgnoreUntil,
+      startX: () => this.startX,
+      onFrontContactStart: (time) => { this.frontContactStart = time; },
+      onFrontContactEnd: () => { this.frontContactStart = 0; },
+      onRearGrounded: (time) => { this.lastRearGroundTime = time; },
+      onRearUngrounded: (time) => { this.lastRearGroundTime = time; },
+      onFail: (reason) => this.triggerFail(reason),
+      setRearGrounded: (state) => { this.rearGrounded = state; },
+      rearGrounded: () => this.rearGrounded,
+      lastTrailTime: () => this.lastTrailTime,
+      setLastTrailTime: (time) => { this.lastTrailTime = time; },
+      spawnDustIfHardLanding: (pos, vy) => this.spawnDustIfHardLanding(pos, vy),
+      spawnSparksIfScrape: () => this.spawnSparksIfScrape(),
     });
 
-    this.matter.world.on("collisionstart", (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
-      if (!this.cart?.rearWheel || this.gameOver) return;
+    this.collisionHandlers = handlers;
 
-      for (const pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        const involvesRear = bodies.some((b) => b.id === this.cart?.rearWheel?.id);
-        if (!involvesRear) continue;
-
-        const other = bodies.find((b) => b.id !== this.cart?.rearWheel?.id);
-        if (!other) continue;
-
-        const isGround = other.label === "ground";
-        const isHazard = other.label === "hazard" || this.course?.hazardBodies.has(other.id);
-
-        if (isHazard) {
-          this.triggerFail("Hit hazard — boom!");
-          return;
-        }
-
-        if (isGround) {
-          this.rearGrounded = true;
-          this.lastRearGroundTime = this.time.now;
-          this.spawnDustIfHardLanding(this.cart.rearWheel.position, this.cart.rearWheel.velocity.y);
-        }
-      }
-    });
-
-    this.matter.world.on("collisionend", (event: Phaser.Physics.Matter.Events.CollisionEndEvent) => {
-      if (!this.cart?.rearWheel || this.gameOver) return;
-      for (const pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        const involvesRear = bodies.some((b) => b.id === this.cart?.rearWheel?.id);
-        if (!involvesRear) continue;
-        this.rearGrounded = false;
-        this.lastRearGroundTime = this.time.now;
-      }
-    });
-
-    this.matter.world.on("collisionend", (event: Phaser.Physics.Matter.Events.CollisionEndEvent) => {
-      if (!this.cart?.frontWheel || this.gameOver) return;
-      for (const pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        const involvesFront = bodies.some((b) => b.id === this.cart?.frontWheel?.id);
-        if (!involvesFront) continue;
-        this.frontContactStart = 0;
-      }
-    });
-
-    this.matter.world.on("collisionstart", (event: Phaser.Physics.Matter.Events.CollisionStartEvent) => {
-      if (!this.cart?.chassis || this.gameOver) return;
-      for (const pair of event.pairs) {
-        const bodies = [pair.bodyA, pair.bodyB];
-        const involvesChassis = bodies.some((b) => b.id === this.cart?.chassis?.id);
-        if (!involvesChassis) continue;
-
-        const other = bodies.find((b) => b.id !== this.cart?.chassis?.id);
-        if (!other) continue;
-
-        const isHazard = other.label === "hazard" || this.course?.hazardBodies.has(other.id);
-        const isGround = other.label === "ground";
-
-        if (isHazard) {
-          this.triggerFail("Hit hazard — boom!");
-          return;
-        }
-
-        if (isGround) {
-          this.spawnSparksIfScrape();
-          const deg = this.normalizeAngleDeg(this.cart.chassis.angle);
-          const upsideDown = deg > 150 && deg < 330;
-          if (upsideDown) {
-            this.triggerFail("Landed on roof — flipped!");
-            return;
-          }
-        }
-      }
-    });
+    this.matter.world.on("collisionstart", handlers.frontStart);
+    this.matter.world.on("collisionend", handlers.frontEnd);
+    this.matter.world.on("collisionstart", handlers.rearStart);
+    this.matter.world.on("collisionend", handlers.rearEnd);
+    this.matter.world.on("collisionstart", handlers.chassisStart);
   }
 
   private applyThrottle(dt: number): void {
