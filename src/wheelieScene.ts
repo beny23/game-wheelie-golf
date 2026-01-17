@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { Cart, createCart, syncCartVisuals } from "./cart";
 import { CourseState, createCourse, ensureCourseAhead } from "./course";
 import { stabilizePitch } from "./controls/pitch";
+import { frontContactExceeded, StallMeter, updateStallMeter } from "./controls/safety";
 import { applyThrottleForces } from "./controls/throttle";
 import { tuning } from "./tuning";
 
@@ -11,13 +12,6 @@ const { Body, Vector } = matter;
 type ThrottleState = {
   active: boolean;
   lastChange: number;
-};
-
-type StallMeter = {
-  value: number;
-  max: number;
-  fillRate: number;
-  drainRate: number;
 };
 
 type ParallaxProp = {
@@ -527,18 +521,16 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private updateStall(dt: number): void {
-    const change = this.throttle.active ? -this.stall.drainRate : this.stall.fillRate;
-    this.stall.value = Phaser.Math.Clamp(this.stall.value + change * dt, 0, this.stall.max);
-
-    if (this.stall.value >= this.stall.max) {
+    const exceeded = updateStallMeter(this.stall, this.throttle.active, dt);
+    if (exceeded) {
       this.triggerFail("Stalled out — exploded!");
     }
   }
 
   private checkFrontContact(): void {
-    if (!this.frontContactStart || this.gameOver) return;
-    const elapsed = this.time.now - this.frontContactStart;
-    if (elapsed >= this.frontContactThresholdMs) {
+    if (this.gameOver) return;
+    const exceeded = frontContactExceeded(this.frontContactStart, this.time.now, this.frontContactThresholdMs);
+    if (exceeded) {
       this.triggerFail("Front wheel touched down — boom!");
     }
   }
