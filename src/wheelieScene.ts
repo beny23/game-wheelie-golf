@@ -4,6 +4,7 @@ import { CourseState, createCourse, ensureCourseAhead } from "./course";
 import { stabilizePitch } from "./controls/pitch";
 import { frontContactExceeded, StallMeter, updateStallMeter } from "./controls/safety";
 import { applyThrottleForces } from "./controls/throttle";
+import { createHud as createHudUi } from "./ui/hud";
 import { tuning } from "./tuning";
 
 const matter = (Phaser.Physics.Matter as any).Matter;
@@ -556,59 +557,14 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private createHud(): void {
-    const card1 = this.add.rectangle(12, 10, 190, 64, 0x0b1224, 0.6)
-      .setOrigin(0, 0)
-      .setScrollFactor(0)
-      .setStrokeStyle(1, 0x38bdf8, 0.35);
-
-    const card2 = this.add.rectangle(12, 84, 210, 74, 0x0b1224, 0.6)
-      .setOrigin(0, 0)
-      .setScrollFactor(0)
-      .setStrokeStyle(1, 0xfef3c7, 0.35);
-
-    const iconSpeed = this.add.triangle(24, 28, 0, 0, 12, 6, 0, 12, 0x38bdf8, 0.95).setScrollFactor(0);
-    iconSpeed.setRotation(Phaser.Math.DegToRad(90));
-    this.statusText = this.add.text(40, 16, "Hold space/click/touch to throttle", {
-      fontSize: "16px",
-      color: "#e2e8f0",
-    }).setScrollFactor(0);
-
-    this.speedText = this.add.text(40, 34, "Speed: 0", {
-      fontSize: "16px",
-      color: "#a5f3fc",
-    }).setScrollFactor(0);
-
-    const iconDistance = this.add.rectangle(24, 60, 10, 14, 0xfef08a, 0.95).setScrollFactor(0);
-    this.distanceText = this.add.text(40, 54, "Distance: 0 m", {
-      fontSize: "16px",
-      color: "#fef08a",
-    }).setScrollFactor(0);
-
-    const iconBest = this.add.star(24, 98, 5, 5, 10, 0xfde68a, 0.9).setScrollFactor(0);
-    this.bestText = this.add.text(40, 90, `Best: ${this.bestDistance.toFixed(1)} m`, {
-      fontSize: "14px",
-      color: "#fde68a",
-    }).setScrollFactor(0);
-
-    const iconDaily = this.add.circle(24, 114, 6, 0xf59e0b, 0.9).setScrollFactor(0);
-    this.dailyText = this.add.text(40, 108, `Today: ${this.dailyBest.toFixed(1)} m`, {
-      fontSize: "14px",
-      color: "#fcd34d",
-    }).setScrollFactor(0);
-
-    const iconSession = this.add.rectangle(24, 132, 10, 10, 0x38bdf8, 0.9).setScrollFactor(0);
-    this.sessionText = this.add.text(40, 126, `Session: ${this.sessionBest.toFixed(1)} m`, {
-      fontSize: "14px",
-      color: "#bae6fd",
-    }).setScrollFactor(0);
-
-    this.angleText = this.add.text(40, 144, "Angle: 0°", {
-      fontSize: "14px",
-      color: "#bbf7d0",
-    }).setScrollFactor(0);
-
-    [card1, card2, iconSpeed, iconDistance, iconBest, iconDaily, iconSession].forEach((obj) => obj.setDepth(20));
-    [this.statusText, this.speedText, this.distanceText, this.bestText, this.dailyText, this.sessionText, this.angleText].forEach((obj) => obj?.setDepth(21));
+    const hud = createHudUi(this, this.bestDistance, this.dailyBest, this.sessionBest);
+    this.statusText = hud.statusText;
+    this.speedText = hud.speedText;
+    this.distanceText = hud.distanceText;
+    this.bestText = hud.bestText;
+    this.dailyText = hud.dailyText;
+    this.sessionText = hud.sessionText;
+    this.angleText = hud.angleText;
   }
 
   private updateBackdrop(distanceMeters: number): void {
