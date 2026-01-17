@@ -3,7 +3,7 @@ import { Cart, createCart, syncCartVisuals } from "./cart";
 import { CourseState, createCourse, ensureCourseAhead } from "./course";
 import { CollisionHandlers, createCollisionHandlers } from "./controls/collisions";
 import { stabilizePitch } from "./controls/pitch";
-import { frontContactExceeded, StallMeter, updateStallMeter } from "./controls/safety";
+import { frontContactExceeded } from "./controls/safety";
 import { applyThrottleForces } from "./controls/throttle";
 import { createHud as createHudUi } from "./ui/hud";
 import { tuning } from "./tuning";
@@ -30,14 +30,11 @@ type ParallaxProp = {
 export class WheelieScene extends Phaser.Scene {
   private throttle: ThrottleState = { active: false, lastChange: 0 };
 
-  private stall: StallMeter = {
-    value: 0,
-    max: tuning.stall.max,
-    fillRate: tuning.stall.fillRate,
-    drainRate: tuning.stall.drainRate,
-  };
+  private restartKey?: Phaser.Input.Keyboard.Key;
 
-  private restartArmed = false;
+  private restartReleaseNeeded = false;
+
+  private restartMinReadyAt = 0;
 
   private sceneStartTime = 0;
 
@@ -121,12 +118,14 @@ export class WheelieScene extends Phaser.Scene {
   private readonly bestStorageKey = "wheelie-best-distance";
 
   create(): void {
+    this.detachCollisionHandlers();
+
     this.sceneStartTime = this.time.now;
     this.gameOver = false;
     this.pendingRestart = false;
-    this.restartArmed = false;
+    this.restartReleaseNeeded = false;
+    this.restartMinReadyAt = 0;
     this.throttle = { active: false, lastChange: this.time.now };
-    this.stall.value = 0;
 
     this.groundCategory = this.matter.world.nextCategory();
     this.group = Body.nextGroup(true);
@@ -143,9 +142,36 @@ export class WheelieScene extends Phaser.Scene {
     this.createGhostMarker();
 
     this.lastRearGroundTime = this.time.now;
+
+    this.events.once("shutdown", () => this.detachCollisionHandlers());
+  }
+
+  private detachCollisionHandlers(): void {
+    if (!this.collisionHandlers) return;
+    this.matter.world.off("collisionstart", this.collisionHandlers.frontStart);
+    this.matter.world.off("collisionend", this.collisionHandlers.frontEnd);
+    this.matter.world.off("collisionstart", this.collisionHandlers.rearStart);
+    this.matter.world.off("collisionend", this.collisionHandlers.rearEnd);
+    this.matter.world.off("collisionstart", this.collisionHandlers.chassisStart);
+    this.collisionHandlers = undefined;
   }
 
   update(_time: number, delta: number): void {
+    if (this.pendingRestart) {
+      const keyDown = this.restartKey?.isDown ?? false;
+      const pointerDown = this.input.activePointer.isDown;
+      if (this.restartReleaseNeeded) {
+        if (!keyDown && !pointerDown) {
+          this.restartReleaseNeeded = false;
+        }
+        return;
+      }
+      if (keyDown || pointerDown) {
+        this.attemptRestart();
+        return;
+      }
+    }
+
     if (this.gameOver) return;
 
     const dt = delta / 1000;
@@ -153,7 +179,6 @@ export class WheelieScene extends Phaser.Scene {
     this.ensureCourseAhead();
     this.applyThrottle(dt);
     this.clampSpeed();
-    this.updateStall(dt);
     this.checkFrontContact();
     this.stabilizePitch(dt);
     this.syncVisuals();
@@ -162,6 +187,8 @@ export class WheelieScene extends Phaser.Scene {
 
   private setupInput(): void {
     this.input.keyboard?.addCapture("SPACE");
+
+    this.restartKey = this.input.keyboard?.addKey("SPACE");
 
     this.input.keyboard?.on("keydown-SPACE", () => this.setThrottle(true));
     this.input.keyboard?.on("keyup-SPACE", () => this.setThrottle(false));
@@ -172,11 +199,8 @@ export class WheelieScene extends Phaser.Scene {
 
   private setThrottle(active: boolean): void {
     if (this.pendingRestart) {
-      if (active && this.restartArmed) {
-        this.pendingRestart = false;
-        this.scene.restart();
-      } else if (!active) {
-        this.restartArmed = true;
+      if (active && !this.restartReleaseNeeded) {
+        this.attemptRestart();
       }
       return;
     }
@@ -405,6 +429,7 @@ export class WheelieScene extends Phaser.Scene {
 
   private registerCollisionHandlers(): void {
     if (!this.cart) return;
+    this.detachCollisionHandlers();
     const handlers = createCollisionHandlers({
       scene: this,
       cart: this.cart,
@@ -444,13 +469,6 @@ export class WheelieScene extends Phaser.Scene {
       rearGrounded: this.rearGrounded,
       lastRearGroundTime: this.lastRearGroundTime,
     });
-  }
-
-  private updateStall(dt: number): void {
-    const exceeded = updateStallMeter(this.stall, this.throttle.active, dt);
-    if (exceeded) {
-      this.triggerFail("Stalled out — exploded!");
-    }
   }
 
   private checkFrontContact(): void {
@@ -681,7 +699,6 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private celebrateMilestone(milestone: number): void {
-    this.stall.value = Math.max(0, this.stall.value - tuning.milestones.stallRelief);
     if (this.cart?.chassis) {
       Body.applyForce(
         this.cart.chassis,
@@ -692,7 +709,7 @@ export class WheelieScene extends Phaser.Scene {
 
     const cx = this.cameras.main.midPoint.x;
     const cy = this.cameras.main.midPoint.y - 120;
-    const banner = this.add.text(cx, cy, `Milestone ${milestone} m\n+stall relief`, {
+    const banner = this.add.text(cx, cy, `Milestone ${milestone} m`, {
       fontSize: "18px",
       color: "#fef08a",
       align: "center",
@@ -808,7 +825,7 @@ export class WheelieScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const cx = cam.width / 2;
     const cy = cam.height / 2;
-    const prompt = this.add.text(cx, cy, `Failed: ${reason}\nRelease, then press throttle to restart`, {
+    const prompt = this.add.text(cx, cy, `Game over: ${reason}`, {
       fontSize: "22px",
       color: "#f472b6",
       align: "center",
@@ -822,7 +839,23 @@ export class WheelieScene extends Phaser.Scene {
       .setShadow(0, 2, "#000000", 8, false, true);
 
     this.pendingRestart = true;
-    this.restartArmed = false;
+    this.restartMinReadyAt = this.time.now + 2000;
+    const keyDown = this.restartKey?.isDown ?? false;
+    const pointerDown = this.input.activePointer.isDown;
+    this.restartReleaseNeeded = keyDown || pointerDown;
+
+    this.time.delayedCall(2000, () => {
+      if (!this.pendingRestart) return;
+      prompt.setText(`Game over: ${reason}\nPress throttle to restart`);
+    });
+  }
+
+  private attemptRestart(): void {
+    if (!this.pendingRestart) return;
+    if (this.time.now < this.restartMinReadyAt) return;
+    this.pendingRestart = false;
+    this.detachCollisionHandlers();
+    this.scene.restart();
   }
 
   private addRectangleFlash(): void {

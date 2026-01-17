@@ -41,11 +41,6 @@ export const tuning = {
     clampThrottle: 1.55,
     clampCoast: 2.0,
   },
-  stall: {
-    max: 100,
-    fillRate: 25,
-    drainRate: 40,
-  },
   speed: {
     maxPxPerSec: 900,
   },
@@ -54,7 +49,6 @@ export const tuning = {
   },
   milestones: {
     intervalMeters: 250,
-    stallRelief: 20,
     impulse: { x: 0.004, y: -0.0012 },
   },
   trails: {

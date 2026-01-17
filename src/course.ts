@@ -16,6 +16,7 @@ export type CourseState = {
   groundY: number;
   groundColors: number[];
   groundCategory: number;
+  lastSurfaceY: number;
 };
 
 export function createCourse(
@@ -32,6 +33,7 @@ export function createCourse(
     groundY: 440,
     groundColors: [0x3f2d20, 0x35251a, 0x2a1c13],
     groundCategory,
+    lastSurfaceY: 440,
   };
 
   addStartLine(scene, state);
@@ -105,6 +107,29 @@ function addGround(
   return piece;
 }
 
+function clampSurfaceY(baseY: number, height: number, maxSurfaceY: number): number {
+  const surfaceY = baseY - height / 2;
+  if (surfaceY > maxSurfaceY) {
+    return baseY - (surfaceY - maxSurfaceY);
+  }
+  return baseY;
+}
+
+function addMicroKicker(
+  scene: Phaser.Scene & { matter: Phaser.Physics.Matter.MatterPhysics },
+  state: CourseState,
+  centerX: number,
+  surfaceY: number,
+  width: number,
+  height: number,
+  color: number,
+): GroundPiece {
+  const angle = 0.12;
+  // Align top surface with the surrounding terrain while giving a gentle takeoff.
+  const centerY = surfaceY + height / 2;
+  return addGround(scene, state, centerX, centerY, width, height, angle, color, false);
+}
+
 function addStartLine(scene: Phaser.Scene, state: CourseState): void {
   const y = state.groundY;
   scene.add.rectangle(120, y - 60, 16, 160, 0xf8fafc, 0.8).setDepth(2);
@@ -155,19 +180,35 @@ function addRollerChunk(
   initialEase: boolean,
 ): void {
   const height = 78 + Phaser.Math.Between(-6, 12) + Math.floor(diff * 6);
-  const angleRange = (0.02 + 0.012 * diff) * (initialEase ? 0.6 : 1);
+  const angleRange = (0.02 + 0.012 * diff) * (initialEase ? 0.5 : 0.85);
   const angle = Phaser.Math.FloatBetween(-angleRange, angleRange);
-  const baseY = state.groundY + Phaser.Math.Between(-12, 14);
+  const prevSurfaceY = state.lastSurfaceY ?? state.groundY;
+  const targetBaseY = prevSurfaceY + height / 2 + Phaser.Math.Between(-4, 6);
+  const maxSurfaceY = (scene.scale?.height ?? 540) - 60;
+  const baseY = clampSurfaceY(targetBaseY, height, maxSurfaceY);
   const centerX = startX + chunkWidth / 2;
   const color = state.groundColors[(state.chunkIndex + 1) % state.groundColors.length];
 
   const groundPiece = addGround(scene, state, centerX, baseY, chunkWidth, height, angle, color, false);
 
   const hazardChance = initialEase ? 0 : Phaser.Math.Clamp(0.14 + diff * 0.05 + progress * 0.05, 0, 0.55);
-  if (Math.random() < hazardChance && chunkWidth > 360) {
-    const hazardWidth = Phaser.Math.Between(120, 240) + Math.floor(diff * 20);
+  const downhill = angle < -0.005;
+  const hazardAllowed = chunkWidth > 360 && (!downhill || Math.random() < 0.35);
+  if (hazardAllowed && Math.random() < hazardChance) {
+    const maxWidth = downhill ? 180 : 240;
+    const hazardWidth = Phaser.Math.Between(120, maxWidth) + Math.floor(diff * (downhill ? 10 : 20));
     const hazardHeight = 38;
+    const surfaceY = baseY - height / 2;
     const hazardCenter = startX + Phaser.Math.Between(Math.floor(chunkWidth * 0.32), Math.floor(chunkWidth * 0.74));
+
+    const kickerWidth = 120;
+    const kickerHeight = 60;
+    const kickerSpacing = 10;
+    const kickerCenter = hazardCenter - hazardWidth / 2 - kickerWidth / 2 - kickerSpacing;
+    if (downhill && kickerCenter > startX + 48) {
+      addMicroKicker(scene, state, kickerCenter, surfaceY, kickerWidth, kickerHeight, color);
+    }
+
     addGround(scene, state, hazardCenter, baseY - 2, hazardWidth, hazardHeight, 0, 0xbe123c, true);
   }
 
@@ -177,6 +218,8 @@ function addRollerChunk(
 
   state.nextChunkX = startX + chunkWidth;
   state.chunkIndex += 1;
+  const exitSurfaceY = baseY - height / 2 + Math.tan(angle) * (chunkWidth / 2);
+  state.lastSurfaceY = Math.min(exitSurfaceY, maxSurfaceY);
   expandWorldBounds(scene, state, cam);
 }
 
@@ -191,16 +234,19 @@ function addKickerChunk(
 ): void {
   const rampUp = Math.random() < 0.55;
   const height = 84 + Phaser.Math.Between(-6, 10) + Math.floor(diff * 8);
-  const baseY = state.groundY + Phaser.Math.Between(-10, 10) + (rampUp ? 6 : -4);
-  const angleBase = rampUp ? 0.06 : -0.05;
-  const angle = angleBase + Phaser.Math.FloatBetween(-0.01, 0.012) + diff * 0.008;
+  const prevSurfaceY = state.lastSurfaceY ?? state.groundY;
+  const targetBaseY = prevSurfaceY + height / 2 + Phaser.Math.Between(-4, 6) + (rampUp ? 6 : -4);
+  const maxSurfaceY = (scene.scale?.height ?? 540) - 60;
+  const baseY = clampSurfaceY(targetBaseY, height, maxSurfaceY);
+  const angleBase = rampUp ? 0.05 : -0.04;
+  const angle = angleBase + Phaser.Math.FloatBetween(-0.008, 0.01) + diff * 0.006;
   const color = state.groundColors[(state.chunkIndex + 2) % state.groundColors.length];
   const centerX = startX + chunkWidth / 2;
 
   const piece = addGround(scene, state, centerX, baseY, chunkWidth, height, angle, color, false);
 
   const hazardChance = Phaser.Math.Clamp(0.18 + diff * 0.06 + progress * 0.08, 0, 0.72);
-  if (Math.random() < hazardChance) {
+  if (rampUp && Math.random() < hazardChance) {
     const hazardWidth = Phaser.Math.Between(110, 200) + Math.floor(diff * 16);
     const hazardHeight = 36;
     const hazardCenter = startX + Phaser.Math.Between(Math.floor(chunkWidth * 0.45), Math.floor(chunkWidth * 0.9));
@@ -213,6 +259,8 @@ function addKickerChunk(
 
   state.nextChunkX = startX + chunkWidth;
   state.chunkIndex += 1;
+  const exitSurfaceY = baseY - height / 2 + Math.tan(angle) * (chunkWidth / 2);
+  state.lastSurfaceY = Math.min(exitSurfaceY, maxSurfaceY);
   expandWorldBounds(scene, state, cam);
 }
 
@@ -226,14 +274,17 @@ function addGapChunk(
   progress: number,
 ): void {
   const leftWidth = Phaser.Math.Between(200, 320) + Math.floor(diff * 16);
-  const rawGap = Phaser.Math.Between(80, 140) + Math.floor(diff * 14);
-  const maxGap = Math.max(80, chunkWidth - leftWidth - 220);
-  const gapWidth = Phaser.Math.Clamp(rawGap, 80, maxGap);
-  const rightWidth = Math.max(200, chunkWidth - leftWidth - gapWidth);
-  const baseY = state.groundY + Phaser.Math.Between(-8, 12);
-  const angleLeft = Phaser.Math.FloatBetween(-0.012, 0.014) + diff * 0.004;
-  const angleRight = Phaser.Math.FloatBetween(-0.012, 0.014) - diff * 0.002;
+  const rawGap = Phaser.Math.Between(70, 120) + Math.floor(diff * 8);
+  const maxGap = Math.max(80, chunkWidth - leftWidth - 260);
+  const gapWidth = Phaser.Math.Clamp(rawGap, 70, maxGap);
+  const rightWidth = Math.max(220, chunkWidth - leftWidth - gapWidth);
   const height = 78 + Math.floor(diff * 6);
+  const prevSurfaceY = state.lastSurfaceY ?? state.groundY;
+  const targetBaseY = prevSurfaceY + height / 2 + Phaser.Math.Between(-6, 6);
+  const maxSurfaceY = (scene.scale?.height ?? 540) - 60;
+  const baseY = clampSurfaceY(targetBaseY, height, maxSurfaceY);
+  const angleLeft = Phaser.Math.FloatBetween(-0.01, 0.012) + diff * 0.003;
+  const angleRight = Phaser.Math.FloatBetween(-0.01, 0.012) - diff * 0.002;
   const color = state.groundColors[(state.chunkIndex + 3) % state.groundColors.length];
 
   const leftCenter = startX + leftWidth / 2;
@@ -262,6 +313,8 @@ function addGapChunk(
 
   state.nextChunkX = startX + leftWidth + gapWidth + rightWidth;
   state.chunkIndex += 1;
+  const exitSurfaceY = baseY - height / 2 + Math.tan(angleRight) * (rightWidth / 2);
+  state.lastSurfaceY = Math.min(exitSurfaceY, maxSurfaceY);
   expandWorldBounds(scene, state, cam);
 }
 
