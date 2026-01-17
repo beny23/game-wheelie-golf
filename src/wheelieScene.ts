@@ -33,6 +33,10 @@ export class WheelieScene extends Phaser.Scene {
 
   private stall: StallMeter = { value: 0, max: 100, fillRate: 25, drainRate: 40 };
 
+  private restartArmed = false;
+
+  private sceneStartTime = 0;
+
   private cart?: Cart;
 
   private course?: CourseState;
@@ -52,7 +56,7 @@ export class WheelieScene extends Phaser.Scene {
 
   private angleText?: Phaser.GameObjects.Text;
 
-  private readonly maxSpeed = 420; // px/s cap for chassis
+  private readonly maxSpeed = 900; // px/s cap for chassis
 
   private statusText?: Phaser.GameObjects.Text;
 
@@ -82,6 +86,8 @@ export class WheelieScene extends Phaser.Scene {
 
   private lastSparkTime = 0;
 
+  private lastRearGroundTime = 0;
+
   private milestoneInterval = 250;
 
   private nextMilestone = 250;
@@ -109,8 +115,10 @@ export class WheelieScene extends Phaser.Scene {
   private readonly bestStorageKey = "wheelie-best-distance";
 
   create(): void {
+    this.sceneStartTime = this.time.now;
     this.gameOver = false;
     this.pendingRestart = false;
+    this.restartArmed = false;
     this.throttle = { active: false, lastChange: this.time.now };
     this.stall.value = 0;
 
@@ -126,7 +134,9 @@ export class WheelieScene extends Phaser.Scene {
     this.createCourse();
     this.createCart();
     this.createHud();
-      this.createGhostMarker();
+    this.createGhostMarker();
+
+    this.lastRearGroundTime = this.time.now;
   }
 
   update(_time: number, delta: number): void {
@@ -155,9 +165,13 @@ export class WheelieScene extends Phaser.Scene {
   }
 
   private setThrottle(active: boolean): void {
-    if (this.pendingRestart && active) {
-      this.pendingRestart = false;
-      this.scene.restart();
+    if (this.pendingRestart) {
+      if (active && this.restartArmed) {
+        this.pendingRestart = false;
+        this.scene.restart();
+      } else if (!active) {
+        this.restartArmed = true;
+      }
       return;
     }
 
@@ -216,8 +230,9 @@ export class WheelieScene extends Phaser.Scene {
     this.cart = createCart(this, group, startX, startY);
     this.startX = startX;
 
-    this.frontTouchIgnoreUntil = this.time.now + 1200;
-    this.flipIgnoreUntil = this.time.now + 1200;
+    const startGraceMs = 2200;
+    this.frontTouchIgnoreUntil = this.time.now + startGraceMs;
+    this.flipIgnoreUntil = this.time.now + startGraceMs;
 
     this.cam = this.cameras.main;
     this.cam.setZoom(1);
@@ -236,9 +251,10 @@ export class WheelieScene extends Phaser.Scene {
 
     if (this.cart?.chassis && this.speedText) {
       const v = this.cart.chassis.velocity;
-      const speed = Math.sqrt(v.x * v.x + v.y * v.y) * 60; // px/s approx
-      this.speedText.setText(`Speed: ${speed.toFixed(0)}`);
-      this.maybeSpawnWheelTrail(speed);
+      const speedPxPerSec = Math.sqrt(v.x * v.x + v.y * v.y) * 60;
+      const speedKmh = speedPxPerSec * 0.036; // 100 px = 1 m, *3.6 -> km/h
+      this.speedText.setText(`Speed: ${speedKmh.toFixed(1)} km/h`);
+      this.maybeSpawnWheelTrail(speedPxPerSec);
     }
 
     if (this.cart?.chassis && this.distanceText) {
@@ -402,6 +418,10 @@ export class WheelieScene extends Phaser.Scene {
         }
 
         if (isGround) {
+          const dx = this.cart.chassis.position.x - this.startX;
+          if (this.time.now < this.frontTouchIgnoreUntil || dx < 260) {
+            continue;
+          }
           this.frontContactStart = this.time.now;
         }
       }
@@ -428,6 +448,7 @@ export class WheelieScene extends Phaser.Scene {
 
         if (isGround) {
           this.rearGrounded = true;
+          this.lastRearGroundTime = this.time.now;
           this.spawnDustIfHardLanding(this.cart.rearWheel.position, this.cart.rearWheel.velocity.y);
         }
       }
@@ -440,6 +461,7 @@ export class WheelieScene extends Phaser.Scene {
         const involvesRear = bodies.some((b) => b.id === this.cart?.rearWheel?.id);
         if (!involvesRear) continue;
         this.rearGrounded = false;
+        this.lastRearGroundTime = this.time.now;
       }
     });
 
@@ -488,25 +510,50 @@ export class WheelieScene extends Phaser.Scene {
     if (!this.cart?.rearWheel || !this.cart?.chassis) return;
 
     const torque = this.throttle.active ? 0.0039 : 0;
+    const elapsed = this.time.now - this.sceneStartTime;
+    const ramp = Phaser.Math.Clamp(elapsed / 1400, 0.35, 1);
 
-    if (torque > 0) {
+    const rearContactAge = this.time.now - this.lastRearGroundTime;
+    const groundedOrRecent = this.rearGrounded || rearContactAge < 160;
+    if (!groundedOrRecent) return;
+
+    const pitchAbs = Math.abs(this.cart.chassis.angle);
+    const pitchFactor = Phaser.Math.Clamp(1 - Math.max(0, pitchAbs - 0.2) * 2.1, 0.36, 1);
+
+    const drive = torque * ramp * (this.rearGrounded ? 1 : 0.62) * pitchFactor;
+
+    if (drive > 0) {
       Body.applyForce(
         this.cart.rearWheel,
         this.cart.rearWheel.position,
-        Vector.create(torque * 9.5, -torque * 0.78),
+        Vector.create(drive * 8.4, -drive * 0.1),
       );
 
       Body.applyForce(
         this.cart.chassis,
         this.cart.chassis.position,
-        Vector.create(torque * 7.0, -torque * 0.2),
+        Vector.create(drive * 4.8, -drive * 0.01),
       );
 
       Body.applyForce(
         this.cart.chassis,
-        { x: this.cart.chassis.position.x - 50, y: this.cart.chassis.position.y + 10 },
-        Vector.create(0, -torque * 0.85),
+        { x: this.cart.chassis.position.x - 52, y: this.cart.chassis.position.y + 10 },
+        Vector.create(0, -drive * 0.22),
       );
+
+      Body.applyForce(
+        this.cart.chassis,
+        { x: this.cart.chassis.position.x - 64, y: this.cart.chassis.position.y + 4 },
+        Vector.create(0, -drive * 0.04),
+      );
+
+      if (pitchAbs < 0.35) {
+        const angImpulse = Phaser.Math.Clamp(drive * 3.5, -0.7, 0.7);
+        Body.setAngularVelocity(
+          this.cart.chassis,
+          Phaser.Math.Clamp(this.cart.chassis.angularVelocity - angImpulse, -1.8, 1.8),
+        );
+      }
 
       Body.setAngularVelocity(
         this.cart.rearWheel,
@@ -534,10 +581,18 @@ export class WheelieScene extends Phaser.Scene {
 
   private stabilizePitch(dt: number): void {
     if (!this.cart?.chassis) return;
-    const damped = this.cart.chassis.angularVelocity * 0.97;
-    const correction = -this.cart.chassis.angle * 0.12;
-    const target = damped + correction * dt * 2.5;
-    const clamped = Phaser.Math.Clamp(target, -1.2, 1.2);
+    if (!this.rearGrounded) {
+      const dampedAir = Phaser.Math.Clamp(this.cart.chassis.angularVelocity * 0.995, -4.5, 4.5);
+      Body.setAngularVelocity(this.cart.chassis, dampedAir);
+      return;
+    }
+
+    const damped = this.cart.chassis.angularVelocity * 0.979;
+    const correctionScale = this.throttle.active ? 0.55 : 1;
+    const correction = -this.cart.chassis.angle * 0.084 * correctionScale;
+    const target = damped + correction * dt * 1.45;
+    const clampLimit = this.throttle.active ? 1.55 : 2.0;
+    const clamped = Phaser.Math.Clamp(target, -clampLimit, clampLimit);
     Body.setAngularVelocity(this.cart.chassis, clamped);
   }
 
@@ -919,7 +974,7 @@ export class WheelieScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const cx = cam.width / 2;
     const cy = cam.height / 2;
-    const prompt = this.add.text(cx, cy, `Failed: ${reason}\nPress throttle to restart`, {
+    const prompt = this.add.text(cx, cy, `Failed: ${reason}\nRelease, then press throttle to restart`, {
       fontSize: "22px",
       color: "#f472b6",
       align: "center",
@@ -933,6 +988,7 @@ export class WheelieScene extends Phaser.Scene {
       .setShadow(0, 2, "#000000", 8, false, true);
 
     this.pendingRestart = true;
+    this.restartArmed = false;
   }
 
   private addRectangleFlash(): void {
