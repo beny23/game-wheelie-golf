@@ -126,6 +126,8 @@ export class WheelieScene extends Phaser.Scene {
     this.restartReleaseNeeded = false;
     this.restartMinReadyAt = 0;
     this.throttle = { active: false, lastChange: this.time.now };
+    this.frontContactStart = 0;
+    this.rearGrounded = false;
 
     this.groundCategory = this.matter.world.nextCategory();
     this.group = Body.nextGroup(true);
